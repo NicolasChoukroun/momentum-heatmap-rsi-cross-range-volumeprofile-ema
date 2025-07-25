@@ -1,0 +1,598 @@
+//@version=6
+indicator("Momentum Volume Box Range Buy/Sell signals (Nikko) v1.0", overlay=false, max_lines_count = 300,  max_boxes_count = 100,max_polylines_count = 100, format=format.price, precision=2)
+  // Set overlay=true for labels to be on the chart
+// === INPUT PARAMETERS ===
+percentDifference = input.float(3, title="Percent Take Profit minimum",group="Internal")
+viLength         = input.int(14, title="Vortex Length",group="Internal")
+stochLength      = input.int(14, title="Stochastic Length",group="Internal")
+smoothK          = input.int(3, title="Smoothing %K",group="Internal")
+smoothD          = input.int(3, title="Smoothing %D",group="Internal")
+rsiLength        = input.int(12, title="RSI Length",group="Internal")
+macdFast         = input.int(4, title="MACD Fast Length",group="Internal")
+macdSlow         = input.int(28, title="MACD Slow Length",group="Internal")
+macdSignal       = input.int(12, title="MACD Signal Smoothing",group="Internal")
+rsiShortSmooth   = input.int(100, title="RSI Short Smoothing (for normalization)",group="Internal")
+rsiLongSmooth    = input.int(500, title="RSI Long Smoothing (for normalization)",group="Internal")
+
+hideHeatmap      = input.bool(false, title="Hide Heatmap",group="Show/Hide")
+hideSRSI      = input.bool(false, title="Hide Atochastic RSI",group="Show/Hide")
+hideVolume      = input.bool(false, title="Hide Volume Profile",group="Show/Hide")
+hideRange      = input.bool(false, title="Hide Volume Pange",group="Show/Hide")
+hideBuySellLabels  = input.bool(false, title="Hide Buy/Sell Labels",group="Show/Hide")
+
+// === COLOR CUSTOMIZATION (🎨 Color Settings tab) ===
+hideLabels      = input.bool(false, title="Hide Labels",group="🎨 Custom Settings")
+colorLow     = input.color(color.rgb(255, 0, 0, 60), title="Heatmap Low Color", group="🎨 Color Settings")
+colorHigh    = input.color(color.rgb(0, 255, 0, 60), title="Heatmap High Color", group="🎨 Color Settings")
+kColor       = input.color(color.rgb(4, 255, 21, 0), title="Hybrid %K Line Color", group="🎨 Color Settings")
+dColor       = input.color(color.rgb(255, 165, 0, 0), title="Hybrid %D Line Color", group="🎨 Color Settings")
+buyColor     = input.color(color.rgb(0, 180, 0, 0), title="Buy Signal Icon Color", group="🎨 Color Settings")
+sellColor    = input.color(color.rgb(180, 0, 0, 0), title="Sell Signal Icon Color", group="🎨 Color Settings")
+
+// === VORTEX INDICATOR ===
+tr       = math.max(math.max(high - low, math.abs(high - close[1])), math.abs(low - close[1]))
+vmPlus   = math.abs(high - low[1])
+vmMinus  = math.abs(low - high[1])
+sumTR    = math.sum(tr, viLength)
+vip      = math.sum(vmPlus, viLength) / sumTR
+vin      = math.sum(vmMinus, viLength) / sumTR
+viDiff   = vip - vin
+
+// === STOCHASTIC OF VORTEX DIFFERENCE ===
+lowestVal  = ta.lowest(viDiff, stochLength)
+highestVal = ta.highest(viDiff, stochLength)
+stochRaw   = (viDiff - lowestVal) / (highestVal - lowestVal)
+k          = ta.sma(stochRaw, smoothK)
+d          = ta.sma(k, smoothD)
+
+// === RSI NORMALIZED ===
+rsi      = ta.rsi(close, rsiLength) / rsiShortSmooth
+rsiLong  = ta.rsi(close, rsiLength * 5) / rsiLongSmooth
+
+// === MACD TREND ===
+[macdLine, macdSigLine, _] = ta.macd(close, macdFast, macdSlow, macdSignal)
+macdTrend = macdLine - macdSigLine
+
+// === HYBRID SIGNAL ===
+kHybrid = k * math.exp(rsiLong) * (macdTrend >= 0 ? 1 : -1)
+dHybrid = d * math.exp(rsi) * (macdTrend >= 0 ? 1 : -1)
+
+// === HEATMAP BASED ON RSI × VORTEX ===
+rsiVortexRaw = viDiff * rsi
+rsiVortexNorm = math.min(math.max((rsiVortexRaw + 1) / 2, 0), 1)
+heatColor = color.from_gradient(rsiVortexNorm, 0, 1, colorLow, colorHigh)
+heatmapDrawOk=true
+
+if kHybrid>=0.8
+    heatmapDrawOk := true
+    heatColor:= color.rgb(200+kHybrid*5,0,0,60)
+    //hideHeatmap:=true
+
+if kHybrid<=-0.8
+    heatmapDrawOk := true
+    heatColor:=color.rgb(0,200+kHybrid*5,0,60)
+    //hideHeatmap:=true
+
+bgcolor(hideHeatmap ? na : heatColor)
+
+// === HYBRID CROSS SIGNALS ===
+crossUp   = ta.crossover(kHybrid, dHybrid)
+crossDown = ta.crossunder(kHybrid, dHybrid)
+
+// === VARIABLES TO STORE LAST BUY PRICE ===
+var float lastBuyPrice = na
+
+// === PLOTS ===
+plot(kHybrid, title="Hybrid %K × RSI × MACD", color=kColor)
+plot(dHybrid, title="Hybrid %D × RSI × MACD", color=dColor)
+hline(0.8, "Strong Up", color=color.rgb(0, 255, 0))
+hline(-0.8, "Strong Down", color=color.rgb(255, 0, 0))
+hline(0.0, "Neutral", color=color.rgb(128, 128, 128))
+
+// === ALERT CONDITIONS ===
+alertcondition(crossUp, title="Sell Signal", message="🔔 Sell Signal: Momentum crossover to the downside.")
+alertcondition(crossDown, title="Buy Signal", message="🔔 Buy Signal: Momentum crossover to the upside.")
+
+// === CROSS ICONS WITH PRICE TEXT USING LABEL.NEW ===
+
+// Store last buy price when a buy signal occurs
+if (crossDown)
+    lastBuyPrice := open
+// Calculate and display sell signal only if profit >= 1%
+decimalDifference=0.0
+percentageDifference=0.0
+if (crossUp)
+    decimalDifference := close - lastBuyPrice
+    percentageDifference := (decimalDifference / lastBuyPrice) * 100    
+
+// Display Buy signal
+if kHybrid<=-1 or percentageDifference <= -(percentDifference/2) and hideLabels==false
+    label.new(hideBuySellLabels ? na: bar_index, low, text="Buy: " + str.tostring(open, "#.########"), style=label.style_label_up, color=buyColor, textcolor=color.white, size=size.normal, yloc=yloc.belowbar, force_overlay=true)
+//    strategy.entry("Buy", strategy.long)
+   
+// Only display sell label if profit is >= 1%
+if (percentageDifference >= percentDifference and hideLabels==false)
+//    strategy.close("Buy")  // Close the full position        
+    label.new(hideBuySellLabels ? na: bar_index, high, text="Sell: " + str.tostring(close, "#.########") +  "\n" + str.tostring(decimalDifference, "#.########") + "\n" + str.tostring(percentageDifference, "#.##") + "%",  style=label.style_label_down, color=sellColor, textcolor=color.white, size=size.normal, yloc=yloc.abovebar, force_overlay=true)    
+
+
+
+//// Volume Profile ‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧—
+
+var bool    vNull   = 0 == ta.sma(nz(volume), 3)
+var bool    vTick   = syminfo.volumetype == "tick"
+var bool    vQuote  = syminfo.volumetype == "quote"
+var int     t       = 1000 * timeframe.in_seconds()
+var int     visible = int((chart.right_visible_bar_time - chart.left_visible_bar_time) / t)
+var float   stretch = math.max(0.32 * visible, 80)
+var color   opacity = color.new(color.white, 100)
+
+if visible>1000
+    visible:=1000
+
+var string   tt1    = "Амплитуда VP.\nАдаптируется к изменению количества баров в видимой части графмка.\n\nWidth\nAmplitude of the VP histogram.\n\n%, [30; 100] ±5"
+var string   tt2    = "Количество колонок гистограммы VP.\n\nGrid\nThe number of columns of the VP histogram.\n\n[50; 250] ±5"
+var string   tt3    = "Комбинаторное определение соотношений продаж и покупок.\n\nDelta of volumes\nCombinatorial determination of the ratios of sellers and buyers."
+var string   tt4    = "Вычисление VP по объёму в котируемых единицах.\n\nIn quoted units\nConversion in units of quoted currency."
+var string   tt5    = "Пересчёт сетки на логарифмическую шкалу котировки.\n\nLogarithmic scale\nRecalculation the grid step to the logarithmic scale of the chart."
+var string   tt6    = "Расчёт VP за период выбранного таймфрейма.\nISO: Изолированное вычисление в HTF-периоде.\n\nCalculation of VP for the period of the selected timeframe.\nISO: Isolated computation in HTF period." 
+var string   tt7    = "Палитра: Профиль, Покупка, Продажа, Бары HTF.\n\nPalette: Total volume, Volume of buyers, Volume of sellers, HTF bars."
+var string   tt8    = "Предупреждения: цвет значка «⚠», язык информации в Tooltip.\n\nWarnings: colour of the «⚠» icon, language of information in the Tooltip."
+var string   tt9    = "Дополнение: Сетка скользящих средних с периодами центрированных гексагональных чисел.\n\nAddition: ᴇᴍ CHN-RMA — a grid of moving averages with periods of centered hexagonal numbers.\n\n© EulerMethod"
+
+var string[] ru = array.from(
+     " ᴱᴿᴿᴼᴿ Нестандартный тип графика. Требуется график типа Бары, Японские свечи, Пустые свечи, Линия или Базовая линия.",
+     " ᴱᴿᴿᴼᴿ Сумма баров, запрошенных функцией LTF, превышает 5000. Понизьте количество видимых баров.",
+     "Сумма баров, запрошенных функцией LTF: {0,number,#}, приближается к лимиту.\n\n⚠ Увеличение количества видимых баров вызовет ошибку обработки данных.",
+     "Поставщик данных не предоставляет данные Объёма. В расчёте использовано произведение типичной цены.",
+     "Предоставлен тиковый Объём. В расчёте использовано произведение типичной цены.",
+     "Предоставлен Объём в котируемых единицах.",
+     "Тамфрейм графика превышает или равен таймфрему НTF, указанному в Настройках.",
+     "HTF-период выходит за пределы видимой области графика."
+     )
+var string[] en = array.from(
+     "ᴱᴿᴿᴼᴿ Non-standard chart type. Requires a Bar, Candlestick, Empty Candle, Line or Baseline chart type.", 
+     "ᴱᴿᴿᴼᴿ The sum of bars requested by the LTF function exceeds 5000. Lower the number of visible bars.",
+     "The sum of bars requested by the LTF function: {0,number,#} is approaching the limit.\n\n⚠ Increasing the number of visible bars will cause a data processing error.",
+     "The data provider does not provide Volume data. The calculation uses the product of a typical price.",
+     "Tick Volume is provided. The calculation uses the product of a typical price.",
+     "The Volume is provided in quoted units.",
+     "The timeframe of the chat exceeds or is equal to the HTF timeframe specified in the Settings.",
+     "The HTF period extends beyond the visible area of the chart."   
+     )
+
+
+//// НАСТРОЙКИ ‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧—
+
+float   i_amp      = input.int( 70, 'Width', 30, 100, 5, tt1, display = display.none, group="Volume Range Profile") / 100
+int     i_rows     = input.int(120, 'Grid',  50, 250, 5, tt2, display = display.none , group="Volume Range Profile")
+bool    i_delta_on = input.bool(false, 'Volume Delta', tt3, display = display.none, group="Volume Range Profile")
+bool    i_quote_on = input.bool(false, 'In Quoted Units', tt4, display = display.none, group="Volume Range Profile")
+bool    i_log_on   = input.bool(false, 'Logarithmic Scale', tt5, display = display.none, group="Volume Range Profile")
+bool    i_htf_on   = input.bool(false, 'HTF ',  '',   'htf', display = display.none, group="Volume Range Profile")
+string  i_htf      = input.string('Auto', '', ['Auto', '15m','30m','45m','1h','2h','3h','4h','6h','8h','12h','1D','2D','3D','1W','2W','1M','2M','3M','6M','1Y'], '', 'htf', display = display.none, group="Volume Range Profile")
+bool    i_htf_iso  = input.bool(false, 'ISO', tt6, 'htf', display = display.none, group="Volume Range Profile")
+color   i_fill     = input.color(#abbed5, '', '', 'color', display = display.none, group="Volume Range Profile")
+color   i_fill_vp  = input.color(color.new(#9ff159, 30), '', '', 'color', display = display.none, group="Volume Range Profile")
+color   i_fill_vn  = input.color(color.new(#149dff, 40), '', '', 'color', display = display.none, group="Volume Range Profile")
+color   i_other_c  = input.color(#617793, '', tt7, 'color', display = display.none, group="Volume Range Profile")
+color   i_wrng_c   = input.color(#ff9800, '', '', 'wrng', display = display.none, group="Volume Range Profile")
+string  i_lng      = input.string('English', '', ['English', 'Русский'], tt8, 'wrng', display = display.none, group="Volume Range Profile")
+
+
+//// ВЫЧИСЛЕНИЕ и ПОСТРОЕНИЕ ‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧‧—
+
+// Ошибки и предупреждения {
+var map<string, string> WRNG = map.new<string, string>()
+
+var label wrng = label.new(chart.point.from_time(na, na), '⚠', xloc.bar_time, yloc.price, opacity, label.style_label_up, i_wrng_c, size.huge, text.align_left)
+
+txt(i) => (i_lng == 'Русский' ? ru : en).get(i)
+
+if not chart.is_standard
+    runtime.error(txt(0))
+
+if vNull and not WRNG.contains('V-NULL')
+    WRNG.put('V-NULL', txt(3))
+
+if vTick and not WRNG.contains('V-TICK')
+    WRNG.put('V-TICK', txt(4))
+
+if vQuote and not i_quote_on and not WRNG.contains('V-QUOTE')
+    WRNG.put('V-QUOTE', txt(5))
+// }
+
+// Бары HTF {
+var int htf_time_0 = na
+var int htf_time_1 = na
+
+if i_htf == 'Auto'
+    i_htf := switch true
+        timeframe.isdaily   => '1M'
+        timeframe.isweekly  => '6M'
+        timeframe.ismonthly => '1Y'
+        timeframe.isminutes and timeframe.multiplier >= 120 => '1W'
+        timeframe.isminutes and timeframe.multiplier >= 5   => '1D'
+        => '1h'
+
+var string HTF = switch i_htf
+    '1h'  =>  '60'
+    '2h'  => '120'
+    '3h'  => '180'
+    '4h'  => '240'
+    '6h'  => '360'
+    '8h'  => '480'
+    '12h' => '720'
+    '1Y'  => '12M'
+    => str.replace(i_htf, 'm', '')
+
+HTF_Bar() =>
+    var box[]  Body  = array.new_box()
+    var line[] Line  = array.new_line()
+    var line[] High  = array.new_line()
+    var line[] Low   = array.new_line()
+    var label  TF    = label.new(chart.point.from_time(na, na), i_htf, xloc.bar_time, yloc.price, opacity, label.style_label_upper_left, i_other_c, size.normal, text.align_left)
+    
+    [H, L, C, O, t1] = request.security(syminfo.tickerid, HTF, [high, low, close, open, time_close], barmerge.gaps_off, barmerge.lookahead_on)
+    var int t0 = na
+    
+    if timeframe.change(HTF)
+        t0 := time
+        float body_0 = math.max(C, O)
+        float body_1 = C == body_0 ? O : C
+        int tm = int((t0 + t1)/2)
+        Body.push(box.new(t0, body_0, t1, body_1, i_other_c, 1, xloc=xloc.bar_time, bgcolor=opacity, force_overlay=true))
+        High.push(line.new(tm, body_0, tm, H, xloc.bar_time, extend.none, i_other_c, line.style_solid, 2, force_overlay=true))
+        Low.push( line.new(tm, body_1, tm, L, xloc.bar_time, extend.none, i_other_c, line.style_solid, 2, force_overlay=true))
+        Line.push(line.new(t0, O, t1, C, xloc.bar_time, extend.none, i_other_c, line.style_dashed, 1, force_overlay=true))
+
+    if barstate.islast
+        if 0 < Body.size()
+            float body_max = math.max(math.max(C, close), O)
+            float body_min = math.min(math.min(C, close), O)
+            box  b = Body.last(), b.set_top(body_max), b.set_bottom(body_min)
+            line h = High.last(), h.set_y1( body_max), h.set_y2(math.max(high, H))
+            line l = Low.last(),  l.set_y1( body_min), l.set_y2(math.min(low,  L))
+            Line.last().set_xy2(t1, C)
+            TF.set_point(chart.point.from_time(t0, L))
+        else
+            t0 := chart.left_visible_bar_time - 1, t1 := chart.right_visible_bar_time + 1 //WRNG: HTF-LARGE
+
+    if Body.size() == (i_delta_on ? 51 : 101)
+        Body.get(0).delete(), Body.shift()
+        High.get(0).delete(), High.shift()
+        Low.get( 0).delete(),  Low.shift()
+        Line.get(0).delete(), Line.shift()
+    
+    array.from(t0, t1)
+
+if i_htf_on
+    if timeframe.in_seconds(HTF) <= timeframe.in_seconds()
+        i_htf_on := false
+        if not WRNG.contains('HTF-S')
+            WRNG.put('HTF-S', txt(6))
+    else
+        int[] htf = HTF_Bar()
+        htf_time_0 := htf.get(0), htf_time_1 := htf.get(1)
+        if htf_time_0 < chart.left_visible_bar_time and chart.right_visible_bar_time < htf_time_1
+            i_htf_on := false
+            if not WRNG.contains('HTF-LARGE')
+                WRNG.put('HTF-LARGE', txt(7))
+// }
+
+// Фрейм {
+Frame() => 
+    var float max = na, var float min = na
+    if chart.left_visible_bar_time <= time and chart.right_visible_bar_time >= time
+        if high >= nz(max, high)
+            max := high
+        if  low <= nz(min, low)
+            min := low
+    [max, min]
+[Max, Min] = Frame()
+
+//Rows
+var float[] Rows = array.new_float(i_rows+1, 0)
+if barstate.islast
+    var float step = (i_log_on ? math.log10(Max / Min) : Max - Min) / i_rows
+    for int n = 0 to i_rows
+        Rows.set(n, i_log_on ? math.pow(10, math.log10(Min) + n * step) : Min + n * step)
+
+//Cols
+// @type Объект Гэп шкалы времени
+// @field t0, t1  Время начала и окончания разрыва
+type gap
+    int t0
+    int t1
+
+// @variable Массив Гэпов
+var map<int, gap> time_gap = map.new<int, gap>()
+
+// @function Вычисление амплитуды колонки с учётом гэпов
+// @return unix-time
+TimeScale(int base, int x, int direct = 1) =>
+    int res = base + x * direct, int tg = 0
+    if 0 != time_gap.keys().size()
+        for g in time_gap.values()
+            if x > g.t0
+                tg += (g.t1 - g.t0) * direct
+            else
+                break
+    res + tg
+// }
+
+// VP {
+// @type Объект Бар
+// @field h, l, c, v  High, Low, Close, Volume
+type bar
+    float h
+    float l
+    float c
+    float v
+
+// @type  Объект Гистограмма
+// @field LTime  Время начала
+// @field RTime  Время окончания
+// @field Total  Массив суммурных объёмов
+// @field Vp     Массив объёмов покупок
+// @field Vn     Массив объёмов продаж 
+// @field Bars   Массив объектов типа bar
+type Histogram
+    int LTime
+    int RTime
+    float[] Total
+    float[] Vp
+    float[] Vn
+    array<bar> Bars
+
+// @variable Массив Гистограмм
+var array<Histogram> ARR = array.new<Histogram>()
+
+//Обновление количества объёма
+method update(array<float> id, int n, float value) => id.set(n, nz(id.get(n)) + value)
+
+//Добавление колонки
+method point(array<chart.point> id, int base, int amp, float q, float p) => 
+    id.push(chart.point.from_time(base, q)), id.push(chart.point.from_time(amp,  q))
+    id.push(chart.point.from_time(amp,  p)), id.push(chart.point.from_time(base, p))
+
+// LTF {
+// @function Сбор массива Bars на LTF
+// @return array<bar>
+LTF(n) =>
+    var string res = timeframe.from_seconds(math.max(timeframe.in_seconds() / n, 60)) //минимальный TF: 1m
+    request.security_lower_tf(syminfo.tickerid, res, bar.new(high, low, close, nz(volume)))
+
+int ltf_n = 30
+while (ltf_n * visible > 5000 and ltf_n > 3)
+    ltf_n -=1
+
+if ltf_n == 3 // ⚠
+    if ltf_n * visible > 5000
+        runtime.error(txt(1))
+    if ltf_n * visible > 4700 and not WRNG.contains('LTF-LIMIT')
+        WRNG.put('LTF-LIMIT', str.format(txt(2), ltf_n * visible))
+// }
+
+// Сбор данных {
+if chart.left_visible_bar_time <= time and time <= chart.right_visible_bar_time
+    //VP
+    if (not i_htf_on and 0 == ARR.size()) or (i_htf_on and time == htf_time_0) //Все видимые или новый HTF-период
+        ARR.push(Histogram.new(
+             htf_time_0,
+             htf_time_1,
+             array.new_float(i_rows, 0), 
+             array.new_float(i_rows, 0), 
+             array.new_float(i_rows, 0), 
+             array.new<bar>()
+             )
+         )
+    //LTF
+    if 0 != ARR.size()
+        for b in LTF(ltf_n)
+            ARR.last().Bars.push(b)
+    //time_gap
+    if time != time_close[1]
+        time_gap.put(time, gap.new(time_close[1], time))
+// }
+
+
+// Вычисляем на последнем баре
+if barstate.islast
+    // Транспонирование {
+    float max = 0
+    for H in ARR
+        for b in H.Bars
+            float v = b.v
+            if vNull or vTick 
+                v := (b.h + b.l + b.c) / 3
+            if i_quote_on and not vQuote
+                v := v * (b.h + b.l + b.c) / 3
+            for int j = 0 to i_rows-1
+                float q = Rows.get(j)
+                if b.h > q and q >= b.l
+                    if i_delta_on 
+                        (b.c > q ? H.Vp : H.Vn).update(j, v)
+                        max := math.max(H.Vp.get(j), H.Vn.get(j), max)
+                    else
+                        H.Total.update(j, v)
+                        max := math.max(H.Total.get(j), max)
+    // }
+    
+    // Построение {
+    for H in ARR
+        if i_delta_on
+            array<chart.point> points_vp = array.new<chart.point>()
+            array<chart.point> points_vn = array.new<chart.point>()
+            int width = int((i_htf_on ? (H.RTime - H.LTime) / 2 : stretch * t * 0.5) * i_amp)
+            int base  = int( i_htf_on ? (H.LTime + H.RTime) / 2 : TimeScale(chart.left_visible_bar_time, width + t))
+            int amp   = base
+            if i_htf_iso
+                max := math.max(H.Vp.max(), H.Vn.max())
+            for int j = 0 to i_rows-1
+                if 0 < H.Vp.get(j)
+                    amp := TimeScale(base, int(width * H.Vp.get(j) / max))
+                    points_vp.point(base, amp, Rows.get(j), Rows.get(j+1))
+                if 0 < H.Vn.get(j)
+                    amp := TimeScale(base, int(width * H.Vn.get(j) / max), -1)
+                    points_vn.point(base, amp, Rows.get(j), Rows.get(j+1))
+            polyline.new(hideVolume ? na:points_vp, false, false, xloc.bar_time, chart.bg_color, i_fill_vp, force_overlay=true)
+            polyline.new(hideVolume ? na:points_vn, false, false, xloc.bar_time, chart.bg_color, i_fill_vn, force_overlay=true)
+        else
+            array<chart.point> points_total = array.new<chart.point>()
+            int width = int((i_htf_on ? H.RTime - H.LTime : stretch * t) * i_amp)
+            int base  = i_htf_on ? H.LTime : chart.left_visible_bar_time
+            int amp   = base
+            if i_htf_iso
+                max := H.Total.max()
+            for int j = 0 to i_rows-1
+                if 0 < H.Total.get(j)
+                    amp := TimeScale(base, int(width * H.Total.get(j) / max))
+                    points_total.point(base, amp, Rows.get(j), Rows.get(j+1))
+            polyline.new(hideVolume ? na:points_total, false, false, xloc.bar_time, chart.bg_color, i_fill, force_overlay=true)
+    // }
+    
+    // ⚠
+    if 0 != WRNG.values().size()
+        wrng.set_point(chart.point.from_time(chart.left_visible_bar_time + int(0.05 * stretch * t), Min)), wrng.set_tooltip('ᴇᴍ VRVP\n\n' + WRNG.values().join('\n\n'))
+        
+// }
+
+
+///////   ᴇᴍ CHN-RMA   ///////
+float rma01 = na, float rma02 = na, float rma03 = na 
+float rma04 = na, float rma05 = na, float rma06 = na
+float rma07 = na, float rma08 = na, float rma09 = na
+
+color i_chn_c = input.color(#abbed5, '', '', 'chn', display = display.none)
+
+if input.bool(false, 'ᴇᴍ CHN-RMA', tt9, 'chn', display = display.none)
+    rma01 := ta.rma(hlc3,   7), rma02 := ta.rma(hlc3,  19), rma03 := ta.rma(hlc3,  37)
+    rma04 := ta.rma(hlc3,  61), rma05 := ta.rma(hlc3,  91), rma06 := ta.rma(hlc3, 127)
+    rma07 := ta.rma(hlc3, 217), rma08 := ta.rma(hlc3, 331), rma09 := ta.rma(hlc3, 397)
+//(1), 7, 19, 37, 61, 91, 127, (169), 217, (271), 331, 397
+
+plot(rma01, title='RMA  1     CHN  7',   color=color.new(i_chn_c,  0), display = display.pane,  force_overlay=true)
+plot(rma02, title='RMA  2     CHN  19',  color=color.new(i_chn_c, 50), display = display.pane, force_overlay=true)
+plot(rma03, title='RMA  3     CHN  37',  color=color.new(i_chn_c, 50), display = display.pane, force_overlay=true)
+plot(rma04, title='RMA  4     CHN  61',  color=color.new(i_chn_c, 50), display = display.pane, force_overlay=true)
+plot(rma05, title='RMA  5     CHN  91',  color=color.new(i_chn_c, 60), display = display.pane, force_overlay=true)
+plot(rma06, title='RMA  6     CHN  127', color=color.new(i_chn_c, 60), display = display.pane, force_overlay=true)
+plot(rma07, title='RMA  7     CHN  217', color=color.new(i_chn_c, 70), display = display.pane, force_overlay=true)
+plot(rma08, title='RMA  8     CHN  331', color=color.new(i_chn_c, 70), display = display.pane, force_overlay=true)
+plot(rma09, title='RMA  9     CHN  397', color=color.new(i_chn_c, 80), display = display.pane, force_overlay=true)
+
+
+//---------------------------------------------------------------------------------------
+
+// ~~ Tooltips {
+var string t1 = "The minimum number of bars required to qualify a range box. A higher value ensures the range is well-established, but may reduce responsiveness."
+var string t2 = "Multiplier that adjusts the vertical size of the range box based on ATR. Larger values create wider boxes and accommodate higher volatility."
+var string t3 = "Enable this to highlight boxes that are actively being broken. Green means a breakout above the box; red indicates a breakdown below."
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Inputs {
+length1   = input.int(50, minval=1, step=1, title="Minimum Range Length", tooltip = t1)
+mult     = input.float(2.0, minval=0.1, step = 0.1, title="Range Width Multiplier", tooltip = t2)
+highlightBreak = input.bool(true, "Highlight Box Breaks", tooltip = t3)
+colorBoxRange     = input.color(color.rgb(88, 73, 90, 50), title="Color Box Neutral", group="🎨 Color Settings")
+colorBoxRange1     = input.color(color.rgb(8,153,119, 50), title="Color Box Green", group="🎨 Color Settings")
+colorBoxRange2     = input.color(color.rgb(242,54,69,50), title="Color Box Red", group="🎨 Color Settings")
+colorBoxRange3     = input.color(color.rgb(33, 87, 243, 50), title="Color Box Blue", group="🎨 Color Settings")
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Calculations {
+atr = ta.atr(1000) * mult
+
+sumWeightedClose = 0.0
+sumWeights       = 0.0
+for i = 0 to length1 - 1
+    delta = math.abs(close[i] - close[i+1])
+    w     = delta / close[i+1]
+    sumWeightedClose := sumWeightedClose + close[i] * w
+    sumWeights  := sumWeights + w
+ma = sumWeights != 0 ? sumWeightedClose / sumWeights : na
+
+distances = array.new_float()
+for i = 0 to length1 - 1
+    distances.push(math.abs(close[i] - ma))
+maxDist = distances.max()
+inRange = maxDist <= atr
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Box {
+b = bar_index
+var line boxMidLine = na
+var line boxTopLine = na
+var line boxBotLine = na
+var box rectBox = na
+var color boxColor = colorBoxRange 
+
+newBox    = inRange and not inRange[1]
+extendBox = inRange and not newBox
+
+if newBox
+    if rectBox.get_right()<(b-length1) or na(rectBox)
+        rectBox := box.new(hideRange ? na: b - length1, ma + atr, b, ma - atr, border_color=color.new(boxColor, 0), bgcolor=color.new(boxColor, 85),  force_overlay=true)
+        boxMidLine := line.new(hideRange ? na: b - length1, math.avg(ma+atr,ma-atr), b, math.avg(ma+atr,ma-atr), color=color.new(boxColor, 50), style=line.style_dotted, force_overlay=true)
+        boxTopLine := line.new(hideRange ? na: b - length1, ma+atr, b, ma+atr, color=color.new(boxColor, 50),  force_overlay=true)
+        boxBotLine := line.new(hideRange ? na: b - length1, ma-atr, b, ma-atr, color=color.new(boxColor, 50),  force_overlay=true)
+
+if extendBox
+    boxMidLine.set_x2(b)
+    boxTopLine.set_x2(b)
+    boxBotLine.set_x2(b)
+
+if highlightBreak
+    breakUp = close > rectBox.get_top() 
+    breakDn = close < rectBox.get_bottom() 
+    boxColor := breakUp ? colorBoxRange1 : breakDn ? colorBoxRange2 : colorBoxRange3
+
+    if not na(rectBox)
+        rectBox.set_bgcolor(boxColor)
+        rectBox.set_border_color(color.new(boxColor, 0))
+
+        boxMidLine.set_color(color.new(boxColor, 0))
+        boxTopLine.set_color(color.new(boxColor, 0))
+        boxBotLine.set_color(color.new(boxColor, 0))
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+// stochastic RSI normalized
+
+smoothK2 = input.int(3, "K", minval=1, group="Stochastic RSI")
+smoothD2 = input.int(3, "D", minval=1, group="Stochastic RSI")
+lengthRSI = input.int(14, "RSI Length", minval=1, group="Stochastic RSI")
+lengthStoch = input.int(14, "Stochastic Length", minval=1, group="Stochastic RSI")
+src = input(close, title="RSI Source", group="Stochastic RSI")
+colorSRSIK2     = input.color(color.rgb(0, 142, 250, 50), title="Stochastic %K line", group="🎨 Color Settings")
+colorSRSID2     = input.color(color.rgb(247, 0, 150, 40), title="Stochastic %D2 line", group="🎨 Color Settings")
+
+rsi1 = ta.rsi(src, lengthRSI)
+rawStoch = ta.stoch(rsi1, rsi1, rsi1, lengthStoch)
+k2 = ta.sma(rawStoch, smoothK2)
+d2 = ta.sma(k2, smoothD2)
+
+// Normalize k2 and d2 to range [-1, 1]
+k2_norm = (2 * k2 / 100) - 1
+d2_norm = (2 * d2 / 100) - 1
+
+plot(hideSRSI ? na:k2_norm, "K (Normalized)", color=colorSRSIK2, style=plot.style_area)
+plot(hideSRSI ? na:d2_norm, "D (Normalized)", color=colorSRSID2, style=plot.style_area)
+
+// Optional: reference lines at -1, 0, 1
+hline(1, "Upper Band", color=#787B86)
+hline(0, "Middle Band", color=color.new(#787B86, 50))
+hline(-1, "Lower Band", color=#787B86)
+//fill(h0, h1, color=color.rgb(33, 150, 243, 90), title="Background")
+
+// all EMAS 
+
+shortest = ta.ema(close, 20)
+short = ta.ema(close, 50)
+longer = ta.ema(close, 100)
+longest = ta.ema(close, 200)
+
+plot(shortest, color = color.red)
+plot(short, color = color.orange)
+plot(longer, color = color.aqua)
+plot(longest, color = color.blue)
