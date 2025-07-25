@@ -1,4 +1,5 @@
 //@version=6
+// GNU License
 indicator("Momentum Volume Box Range Buy/Sell signals (Nikko) v1.0", overlay=false, max_lines_count = 300,  max_boxes_count = 100,max_polylines_count = 100, format=format.price, precision=2)
   // Set overlay=true for labels to be on the chart
 // === INPUT PARAMETERS ===
@@ -592,7 +593,7 @@ short = ta.ema(close, 50)
 longer = ta.ema(close, 100)
 longest = ta.ema(close, 200)
 
-plot(shortest, color = color.red)
-plot(short, color = color.orange)
-plot(longer, color = color.aqua)
-plot(longest, color = color.blue)
+plot(shortest, color = color.red,  force_overlay=true)
+plot(short, color = color.orange,  force_overlay=true)
+plot(longer, color = color.aqua,  force_overlay=true)
+plot(longest, color = color.blue,  force_overlay=true)
