@@ -1,5 +1,5 @@
 //@version=6
-// GNU License
+// GNA license
 indicator("Momentum Volume Box Range Buy/Sell signals (Nikko) v1.0", overlay=false, max_lines_count = 300,  max_boxes_count = 100,max_polylines_count = 100, format=format.price, precision=2)
   // Set overlay=true for labels to be on the chart
 // === INPUT PARAMETERS ===
@@ -565,8 +565,8 @@ smoothD2 = input.int(3, "D", minval=1, group="Stochastic RSI")
 lengthRSI = input.int(14, "RSI Length", minval=1, group="Stochastic RSI")
 lengthStoch = input.int(14, "Stochastic Length", minval=1, group="Stochastic RSI")
 src = input(close, title="RSI Source", group="Stochastic RSI")
-colorSRSIK2     = input.color(color.rgb(0, 142, 250, 50), title="Stochastic %K line", group="🎨 Color Settings")
-colorSRSID2     = input.color(color.rgb(247, 0, 150, 40), title="Stochastic %D2 line", group="🎨 Color Settings")
+colorSRSIK2     = input.color(color.rgb(0, 142, 250, 10), title="Stochastic %K line", group="🎨 Color Settings")
+colorSRSID2     = input.color(color.rgb(247, 0, 150, 20), title="Stochastic %D2 line", group="🎨 Color Settings")
 
 rsi1 = ta.rsi(src, lengthRSI)
 rawStoch = ta.stoch(rsi1, rsi1, rsi1, lengthStoch)
@@ -577,8 +577,19 @@ d2 = ta.sma(k2, smoothD2)
 k2_norm = (2 * k2 / 100) - 1
 d2_norm = (2 * d2 / 100) - 1
 
-plot(hideSRSI ? na:k2_norm, "K (Normalized)", color=colorSRSIK2, style=plot.style_area)
-plot(hideSRSI ? na:d2_norm, "D (Normalized)", color=colorSRSID2, style=plot.style_area)
+K2above= false
+
+if k2_norm>=0
+    K2above:=true
+
+
+plot(hideSRSI and K2above? na:k2_norm, "K (Normalized)", color=colorSRSIK2, style=plot.style_area)
+plot(hideSRSI and K2above? na:d2_norm, "D (Normalized)", color=colorSRSID2, style=plot.style_area)
+
+plot(hideSRSI and not K2above ? na:d2_norm, "D (Normalized)", color=colorSRSID2, style=plot.style_area)
+plot(hideSRSI and not K2above ? na:k2_norm, "K (Normalized)", color=colorSRSIK2, style=plot.style_area)
+
+
 
 // Optional: reference lines at -1, 0, 1
 hline(1, "Upper Band", color=#787B86)
